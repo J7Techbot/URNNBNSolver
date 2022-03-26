@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
@@ -15,9 +16,10 @@ namespace URNNBNSolver.ViewModels
 {
     public class MainViewModel : BaseViewModel
     {
+        private static HttpClient _client = new HttpClient();
         private string[] _fileNames;
-        private string confirmString;
 
+        private string confirmString;
         public string ConfirmString
         {
             get
@@ -30,6 +32,7 @@ namespace URNNBNSolver.ViewModels
                 OnPropertyChanged();
             }
         }
+
         private bool withPredecessor;
         public bool WithPredecessor
         {
@@ -43,6 +46,7 @@ namespace URNNBNSolver.ViewModels
                 OnPropertyChanged();
             }
         }
+
         private bool newUuid;
         public bool NewUuid
         {
@@ -56,6 +60,12 @@ namespace URNNBNSolver.ViewModels
                 OnPropertyChanged();
             }
         }
+
+        private string _serverURL = "https://resolver-test.nkp.cz/api/v4";
+        private string _sigla = "ex001";
+        private string _login = "exon";
+        private string _psw = "tpL9zsk9";
+
         public RelayCommand SelectMetsCommand { get; set; }
         public RelayCommand GenerateCommand { get; set; }
 
@@ -64,10 +74,8 @@ namespace URNNBNSolver.ViewModels
             SelectMetsCommand = new RelayCommand(param => this.OnSelectMetsCommand(), param => true);
             GenerateCommand = new RelayCommand(param => this.OnGenerate(), param => true);
         }
-        private void OnGenerate()
+        private async void OnGenerate()
         {
-            //MessageBox.Show("pre=" + WithPredecessor.ToString() + "|uuid=" + NewUuid.ToString());
-
             if (_fileNames == null)
             {
                 MessageBox.Show("Nejsou vybraná žádná mets!");
@@ -78,52 +86,145 @@ namespace URNNBNSolver.ViewModels
             {
                 XDocument _xMets = XDocument.Load(_fileNames[i]);
 
-                Dictionary<string,string> metaDict = GetMeta(_xMets);
+                Dictionary<string,string> _metaDict = GetMeta(_xMets);
 
-                MonoReq(metaDict);
+                XDocument _xReq = CreateRequest(_metaDict);
+
+                var response = await Task.Run(() => Send4RegisterURNNBN(_xReq));
+                var r = response;
+
             }
         }
-        private XDocument MonoReq(Dictionary<string, string> metaDict)
+        private XDocument CreateRequest(Dictionary<string, string> metaDict)
         {
             XNamespace mNS = XNamespace.Get("http://resolver.nkp.cz/v4/");
             XDocument request = new XDocument();
 
-            XElement root =
-                new XElement(mNS + "import", new XAttribute("test", "5"),
-                    new XElement(mNS + "monographVolume",
-                        new XElement(mNS + "titleInfo",
-                            new XElement(mNS + "monographTitle", metaDict["title"]))));
+            string mainEle = "";
+            string title = "";
+            string subtitle = "";
 
-            XElement monographVolume = root.Descendants(mNS + "monographVolume").First();
+            if (metaDict["projectType"].ToLower() == "periodical")
+            {
+                mainEle = "periodicalIssue";
+                title = "periodicalTitle";
+                subtitle = "issueTitle";
+            }
+            else
+            {
+                mainEle = "monographVolume";
+                title = "monographTitle";
+                subtitle = "volumeTitle";
+            }
+
+            XElement root =
+                new XElement(mNS + "import",
+                    new XElement(mNS + mainEle,
+                        new XElement(mNS + "titleInfo",
+                            new XElement(mNS + title, metaDict["title"]))),
+                    new XElement(mNS + "digitalDocument"));
+
+            XElement main = root.Element(mNS + mainEle);
 
             if (metaDict["subTitle"] != null)
-                root.Descendants(mNS + "monographTitle").First().AddAfterSelf(new XElement(mNS + "volumeTitle", metaDict["subTitle"]));
+                root.Descendants(mNS + title).First().AddAfterSelf(new XElement(mNS + subtitle, metaDict["subTitle"]));
+            else
+                root.Descendants(mNS + title).First().AddAfterSelf(new XElement(mNS + subtitle, "default"));
 
             if (metaDict["ccnb"] != null)
-                monographVolume.Add(new XElement(mNS + "ccnb", metaDict["ccnb"]));
+                main.Add(new XElement(mNS + "ccnb", metaDict["ccnb"]));
             if (metaDict["isnb"] != null)
-                monographVolume.Add(new XElement(mNS + "isnb", metaDict["isnb"]));
+                main.Add(new XElement(mNS + "isnb", metaDict["isnb"]));
             if (metaDict["documentType"] != null)
-                monographVolume.Add(new XElement(mNS + "documentType", metaDict["documentType"]));
+                main.Add(new XElement(mNS + "documentType", metaDict["documentType"]));
             if (metaDict["digitalBorn"] != null)
-                monographVolume.Add(new XElement(mNS + "digitalBorn", metaDict["digitalBorn"]));
+                main.Add(new XElement(mNS + "digitalBorn", metaDict["digitalBorn"]));
             if (metaDict["primaryOriginatorName"] != null)
-                monographVolume.Add(new XElement(mNS + "primaryOriginator", metaDict["primaryOriginatorName"]));
+                main.Add(new XElement(mNS + "primaryOriginator", metaDict["primaryOriginatorName"],new XAttribute("type","AUTHOR")));
 
+            main.Add(new XElement(mNS + "publication"));
+            var publication = main.Element(mNS + "publication"); 
 
+            if (metaDict["publisher"] != null)
+                publication.Add(new XElement(mNS + "publisher", metaDict["publisher"]));
+            if (metaDict["place"] != null)
+                publication.Add(new XElement(mNS + "place", metaDict["place"]));
+            if (metaDict["year"] != null)
+                publication.Add(new XElement(mNS + "year", metaDict["year"]));
 
+            XElement digitalDocument = root.Element(mNS + "digitalDocument");
+
+            digitalDocument.Add(new XElement(mNS + "archiverId", "1"));
+
+            if (WithPredecessor)
+            {
+                digitalDocument.Add(new XElement(mNS + "urnNbn"));
+                digitalDocument.Element(mNS + "urnNbn").Add(new XElement(mNS + "predecessor", new XAttribute("value", metaDict["urnnbn"]), new XAttribute("note", "test note")));
+            }
+            else
+            {
+                Send4DeleteIdentifiers(metaDict["urnnbn"]);
+                Send4DeleteURNNBN(metaDict["urnnbn"]);
+            }
+                               
+            digitalDocument.Add(new XElement(mNS + "registrarScopeIdentifiers"));
+           
+            digitalDocument.Element(mNS + "registrarScopeIdentifiers").Add(new XElement(mNS + "id", metaDict["uuid"], new XAttribute("type", "K4_pid")));
+
+            if (metaDict["financed"] != null)
+                digitalDocument.Add(new XElement(mNS + "financed", metaDict["financed"]));
+            if (metaDict["contractNumber"] != null)
+                digitalDocument.Add(new XElement(mNS + "contractNumber", metaDict["contractNumber"]));
+
+            request.Add(root);
             return request;
         }
-        private XDocument PeriReq(Dictionary<string, string> metaDict)
+
+        private async Task<string> Send4RegisterURNNBN(XDocument request)
         {
-            XDocument request = new XDocument();
+            try
+            {
+                //https://resolver-test.nkp.cz/api/v4/registrars/ex001/digitalDocuments
+                string url = _serverURL + "/registrars/" + _sigla + "/digitalDocuments";
+
+                var byteArray = Encoding.ASCII.GetBytes(_login + ":" + _psw);
+                _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
+
+                var stringContent = new StringContent(request.ToString(), Encoding.UTF8, "application/xml");
+                var response = await _client.PostAsync(url, stringContent);
+
+                string responseBody = await response.Content.ReadAsStringAsync();
+
+                return responseBody;
+            }
+            catch
+            {
+                MessageBox.Show("Nepodařilo se zaregistrovat nové urnnbn");
+                return null;
+            }
+        }
+        private async void Send4DeleteURNNBN(string urnnbn)
+        {
+            string _urnnbn = urnnbn;
+
+            //var respone = await _client.PostAsync("/someurl", stringContent);
+        }
+        private async void Send4DeleteIdentifiers(string urnnbn)
+        {
+            string _urnnbn = urnnbn;
+        }
+        private async void Send4Info(string urnnbn)
+        {
+            //https://resolver-test.nkp.cz/api/v4/urnnbn/urn:nbn:cz:ex001-00011r
 
 
+            string addr = _serverURL+"/urnnbn/"+ urnnbn;
 
-            return request;
+            HttpResponseMessage response = await _client.GetAsync(addr);
+            response.EnsureSuccessStatusCode();
+            string responseBody = await response.Content.ReadAsStringAsync();
         }
 
-        
         private Dictionary<string, string> GetMeta(XDocument _xMets)
         {
             Dictionary<string, string> metas = new Dictionary<string, string>();
@@ -144,6 +245,7 @@ namespace URNNBNSolver.ViewModels
             metas.Add("place", _xMets.Descendants(mNS + "placeTerm").Where(x=>x.Attribute("type").Value == "text").FirstOrDefault()?.Value);
             metas.Add("year", _xMets.Descendants(mNS + "dateIssued").FirstOrDefault()?.Value);
             metas.Add("uuid", _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "uuid").FirstOrDefault()?.Value);
+            metas.Add("urnnbn", _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "urnnbn").FirstOrDefault()?.Value);
             metas.Add("financed", _xMets.Descendants(mNS + "financed").FirstOrDefault()?.Value); //ověřit
             metas.Add("contractNumber", _xMets.Descendants(mNS + "contractNumber").FirstOrDefault()?.Value); //ověřit
 
