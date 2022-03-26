@@ -16,6 +16,7 @@ namespace URNNBNSolver.ViewModels
 {
     public class MainViewModel : BaseViewModel
     {
+        #region Properties
         private static HttpClient _client = new HttpClient();
         private string[] _fileNames;
 
@@ -65,16 +66,59 @@ namespace URNNBNSolver.ViewModels
         private string _sigla = "ex001";
         private string _login = "exon";
         private string _psw = "tpL9zsk9";
+        #endregion
 
         public RelayCommand SelectMetsCommand { get; set; }
         public RelayCommand GenerateCommand { get; set; }
 
         public MainViewModel()
         {
-            SelectMetsCommand = new RelayCommand(param => this.OnSelectMetsCommand(), param => true);
-            GenerateCommand = new RelayCommand(param => this.OnGenerate(), param => true);
+            SelectMetsCommand = new RelayCommand(param => this.OnSelectMets(), param => true);
+            GenerateCommand = new RelayCommand(param => this.OnGenerateURNNBN(), param => true);
         }
-        private async void OnGenerate()
+        private Dictionary<string, string> GetMeta(XDocument _xMets)
+        {
+            Dictionary<string, string> metas = new Dictionary<string, string>();
+
+            XNamespace mNS = XNamespace.Get("http://www.loc.gov/mods/v3");
+            XNamespace metsNS = XNamespace.Get("http://www.loc.gov/METS/");
+
+            metas.Add("projectType", _xMets.Root.Attribute("TYPE").Value);
+            metas.Add("title", _xMets.Descendants(mNS + "title").FirstOrDefault()?.Value);
+            metas.Add("subTitle", _xMets.Descendants(mNS + "subTitle").FirstOrDefault()?.Value);
+            metas.Add("ccnb", _xMets.Descendants(mNS + "ccnb").FirstOrDefault()?.Value); //ověřit
+            metas.Add("isnb", _xMets.Descendants(mNS + "isnb").FirstOrDefault()?.Value); //ověřit
+            metas.Add("documentType", _xMets.Descendants(mNS + "documentType").FirstOrDefault()?.Value); //ověřit
+            metas.Add("digitalBorn", _xMets.Descendants(mNS + "digitalBorn").FirstOrDefault()?.Value); //ověřit            
+            metas.Add("primaryOriginatorName", GetFullName(_xMets.Descendants(mNS + "name").Where(x => x.Attribute("type").Value == "personal" && x.Attribute("usage") != null && x.Attribute("usage").Value == "primary").FirstOrDefault())); //ověřit
+            metas.Add("otherOriginatorName", GetFullName(_xMets.Descendants(mNS + "name").Where(x => x.Attribute("type").Value == "personal" && x.Attribute("usage") != null && x.Attribute("usage").Value == "primary").FirstOrDefault())); //ověřit
+            metas.Add("publisher", _xMets.Descendants(mNS + "publisher").FirstOrDefault()?.Value);
+            metas.Add("place", _xMets.Descendants(mNS + "placeTerm").Where(x => x.Attribute("type").Value == "text").FirstOrDefault()?.Value);
+            metas.Add("year", _xMets.Descendants(mNS + "dateIssued").FirstOrDefault()?.Value);
+            metas.Add("uuid", _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "uuid").FirstOrDefault()?.Value);
+            metas.Add("urnnbn", _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "urnnbn").FirstOrDefault()?.Value);
+            metas.Add("financed", _xMets.Descendants(mNS + "financed").FirstOrDefault()?.Value); //ověřit
+            metas.Add("contractNumber", _xMets.Descendants(mNS + "contractNumber").FirstOrDefault()?.Value); //ověřit
+
+            return metas;
+        }
+        private void OnSelectMets()
+        {
+            OpenFileDialog dlg = new OpenFileDialog();
+            dlg.Multiselect = true;
+            dlg.FileName = "Mets";
+            dlg.DefaultExt = ".xml";
+            dlg.Filter = "Mets documents (.xml)|*.xml";
+
+            bool result = (bool)dlg.ShowDialog();
+
+            if (result == true)
+            {
+                _fileNames = dlg.FileNames;
+                ConfirmString = "Vybráno " + _fileNames.Length + " souborů.";
+            }
+        }
+        private async void OnGenerateURNNBN()
         {
             if (_fileNames == null)
             {
@@ -82,20 +126,38 @@ namespace URNNBNSolver.ViewModels
                 return;
             }
 
+            XNamespace mNS = XNamespace.Get("http://www.loc.gov/mods/v3");
+            XNamespace dNS = XNamespace.Get("http://purl.org/dc/elements/1.1/");
+
             for (int i = 0; i < _fileNames.Length; i++)
             {
+
                 XDocument _xMets = XDocument.Load(_fileNames[i]);
 
                 Dictionary<string,string> _metaDict = GetMeta(_xMets);
 
-                XDocument _xReq = CreateRequest(_metaDict);
+                XDocument _xReq = await CreateRequest(_metaDict);
 
-                var response = await Task.Run(() => Send4RegisterURNNBN(_xReq));
-                var r = response;
+                var urnnbn = await Send4RegisterURNNBN(_xReq);
 
+                var urnNodesMods =_xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "urnnbn");
+                foreach (var node in urnNodesMods)
+                {
+                    node.Value = urnnbn;
+                }
+
+                var urnNodesDC = _xMets.Descendants(dNS + "identifier").Where(x => x.Value.StartsWith("urn:nbn"));
+                foreach (var node in urnNodesDC)
+                {
+                    node.Value = urnnbn;
+                }
+
+                _xMets.Save(_fileNames[i]);
             }
         }
-        private XDocument CreateRequest(Dictionary<string, string> metaDict)
+
+        #region Requests
+        private async Task<XDocument> CreateRequest(Dictionary<string, string> metaDict)
         {
             XNamespace mNS = XNamespace.Get("http://resolver.nkp.cz/v4/");
             XDocument request = new XDocument();
@@ -140,10 +202,10 @@ namespace URNNBNSolver.ViewModels
             if (metaDict["digitalBorn"] != null)
                 main.Add(new XElement(mNS + "digitalBorn", metaDict["digitalBorn"]));
             if (metaDict["primaryOriginatorName"] != null)
-                main.Add(new XElement(mNS + "primaryOriginator", metaDict["primaryOriginatorName"],new XAttribute("type","AUTHOR")));
+                main.Add(new XElement(mNS + "primaryOriginator", metaDict["primaryOriginatorName"], new XAttribute("type", "AUTHOR")));
 
             main.Add(new XElement(mNS + "publication"));
-            var publication = main.Element(mNS + "publication"); 
+            var publication = main.Element(mNS + "publication");
 
             if (metaDict["publisher"] != null)
                 publication.Add(new XElement(mNS + "publisher", metaDict["publisher"]));
@@ -158,17 +220,19 @@ namespace URNNBNSolver.ViewModels
 
             if (WithPredecessor)
             {
+                await Send4DeleteIdentifiers(metaDict["urnnbn"]);
+
                 digitalDocument.Add(new XElement(mNS + "urnNbn"));
                 digitalDocument.Element(mNS + "urnNbn").Add(new XElement(mNS + "predecessor", new XAttribute("value", metaDict["urnnbn"]), new XAttribute("note", "test note")));
             }
             else
             {
-                Send4DeleteIdentifiers(metaDict["urnnbn"]);
-                Send4DeleteURNNBN(metaDict["urnnbn"]);
+                if (await Send4DeleteIdentifiers(metaDict["urnnbn"]))
+                    await Send4DeleteURNNBN(metaDict["urnnbn"]);
             }
-                               
+
             digitalDocument.Add(new XElement(mNS + "registrarScopeIdentifiers"));
-           
+
             digitalDocument.Element(mNS + "registrarScopeIdentifiers").Add(new XElement(mNS + "id", metaDict["uuid"], new XAttribute("type", "K4_pid")));
 
             if (metaDict["financed"] != null)
@@ -179,7 +243,6 @@ namespace URNNBNSolver.ViewModels
             request.Add(root);
             return request;
         }
-
         private async Task<string> Send4RegisterURNNBN(XDocument request)
         {
             try
@@ -187,86 +250,75 @@ namespace URNNBNSolver.ViewModels
                 //https://resolver-test.nkp.cz/api/v4/registrars/ex001/digitalDocuments
                 string url = _serverURL + "/registrars/" + _sigla + "/digitalDocuments";
 
-                var byteArray = Encoding.ASCII.GetBytes(_login + ":" + _psw);
-                _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
+                Authorize();
 
                 var stringContent = new StringContent(request.ToString(), Encoding.UTF8, "application/xml");
                 var response = await _client.PostAsync(url, stringContent);
 
                 string responseBody = await response.Content.ReadAsStringAsync();
 
+                XNamespace mNS = XNamespace.Get("http://resolver.nkp.cz/v4/");
+                responseBody = XDocument.Parse(responseBody).Descendants(mNS + "value").FirstOrDefault()?.Value.ToString();
+
                 return responseBody;
             }
             catch
             {
-                MessageBox.Show("Nepodařilo se zaregistrovat nové urnnbn");
+                MessageBox.Show("Vyskytl se neočekávaný problém při registraci nového urnnbn!");
                 return null;
             }
         }
-        private async void Send4DeleteURNNBN(string urnnbn)
+        private async Task<bool> Send4DeleteURNNBN(string urnnbn)
         {
-            string _urnnbn = urnnbn;
-
-            //var respone = await _client.PostAsync("/someurl", stringContent);
-        }
-        private async void Send4DeleteIdentifiers(string urnnbn)
-        {
-            string _urnnbn = urnnbn;
-        }
-        private async void Send4Info(string urnnbn)
-        {
-            //https://resolver-test.nkp.cz/api/v4/urnnbn/urn:nbn:cz:ex001-00011r
-
-
-            string addr = _serverURL+"/urnnbn/"+ urnnbn;
-
-            HttpResponseMessage response = await _client.GetAsync(addr);
-            response.EnsureSuccessStatusCode();
-            string responseBody = await response.Content.ReadAsStringAsync();
-        }
-
-        private Dictionary<string, string> GetMeta(XDocument _xMets)
-        {
-            Dictionary<string, string> metas = new Dictionary<string, string>();
-
-            XNamespace mNS = XNamespace.Get("http://www.loc.gov/mods/v3");
-            XNamespace metsNS = XNamespace.Get("http://www.loc.gov/METS/");
-
-            metas.Add("projectType", _xMets.Root.Attribute("TYPE").Value);
-            metas.Add("title",_xMets.Descendants(mNS+"title").FirstOrDefault()?.Value);
-            metas.Add("subTitle", _xMets.Descendants(mNS+"subTitle").FirstOrDefault()?.Value);
-            metas.Add("ccnb", _xMets.Descendants(mNS + "ccnb").FirstOrDefault()?.Value); //ověřit
-            metas.Add("isnb", _xMets.Descendants(mNS + "isnb").FirstOrDefault()?.Value); //ověřit
-            metas.Add("documentType", _xMets.Descendants(mNS + "documentType").FirstOrDefault()?.Value); //ověřit
-            metas.Add("digitalBorn", _xMets.Descendants(mNS + "digitalBorn").FirstOrDefault()?.Value); //ověřit            
-            metas.Add("primaryOriginatorName", GetFullName(_xMets.Descendants(mNS + "name").Where(x=>x.Attribute("type").Value == "personal" && x.Attribute("usage") != null && x.Attribute("usage").Value == "primary").FirstOrDefault())); //ověřit
-            metas.Add("otherOriginatorName", GetFullName(_xMets.Descendants(mNS + "name").Where(x => x.Attribute("type").Value == "personal" && x.Attribute("usage") != null && x.Attribute("usage").Value == "primary").FirstOrDefault())); //ověřit
-            metas.Add("publisher", _xMets.Descendants(mNS + "publisher").FirstOrDefault()?.Value);
-            metas.Add("place", _xMets.Descendants(mNS + "placeTerm").Where(x=>x.Attribute("type").Value == "text").FirstOrDefault()?.Value);
-            metas.Add("year", _xMets.Descendants(mNS + "dateIssued").FirstOrDefault()?.Value);
-            metas.Add("uuid", _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "uuid").FirstOrDefault()?.Value);
-            metas.Add("urnnbn", _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "urnnbn").FirstOrDefault()?.Value);
-            metas.Add("financed", _xMets.Descendants(mNS + "financed").FirstOrDefault()?.Value); //ověřit
-            metas.Add("contractNumber", _xMets.Descendants(mNS + "contractNumber").FirstOrDefault()?.Value); //ověřit
-
-            return metas;
-        }
-        private void OnSelectMetsCommand()
-        {
-            OpenFileDialog dlg = new OpenFileDialog();
-            dlg.Multiselect = true;
-            dlg.FileName = "Mets";
-            dlg.DefaultExt = ".xml";
-            dlg.Filter = "Mets documents (.xml)|*.xml";
-
-            bool result = (bool)dlg.ShowDialog();
-
-            if (result == true)
+            try
             {
-                _fileNames = dlg.FileNames;
-                ConfirmString = "Vybráno "+_fileNames.Length+" souborů.";
-            }            
-        }  
+                //https://resolver-test.nkp.cz/api/v4/urnnbn/urn:nbn:cz:ex001-0000xy
+
+                Authorize();
+
+                string _urnnbn = urnnbn;
+
+                string addr = _serverURL + "/urnnbn/" + _urnnbn;
+
+                HttpResponseMessage response = await _client.DeleteAsync(addr);
+
+                string responseBody = await response.Content.ReadAsStringAsync();
+
+                return true;
+            }
+            catch
+            {
+                MessageBox.Show("Vyskytl se neočekávaný problém při deaktivaci starého urnnbn!");
+                return false;
+            }
+
+        }
+        private async Task<bool> Send4DeleteIdentifiers(string urnnbn)
+        {
+            try
+            {
+                //https://resolver-test.nkp.cz/api/v4/resolver/urn:nbn:cz:ex001-0000y3/registrarScopeIdentifiers
+
+                Authorize();
+
+                string _urnnbn = urnnbn;
+
+                string addr = _serverURL + "/resolver/" + _urnnbn + "/registrarScopeIdentifiers";
+
+                HttpResponseMessage response = await _client.DeleteAsync(addr);
+
+                string responseBody = await response.Content.ReadAsStringAsync();
+                   
+                return true;
+            }
+            catch
+            {
+                MessageBox.Show("Vyskytl se neočekávaný problém při odtraňování identifikátorů!");
+                return false;
+            }
+        }
+        #endregion
+        #region HelperFcs
         private string GetFullName(XElement _xEle)
         {
             if (_xEle != null)
@@ -287,5 +339,12 @@ namespace URNNBNSolver.ViewModels
             }
             else return null;
         }
+        private void Authorize()
+        {
+            var byteArray = Encoding.ASCII.GetBytes(_login + ":" + _psw);
+            _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
+
+        }
+        #endregion
     }
 }
