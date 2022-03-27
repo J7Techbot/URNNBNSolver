@@ -9,8 +9,12 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Forms;
 using System.Xml.Linq;
+using URNNBNSolver.Models;
 using URNNBNSolver.Shared;
+
+
 
 
 namespace URNNBNSolver.ViewModels
@@ -18,8 +22,23 @@ namespace URNNBNSolver.ViewModels
     public class MainViewModel : BaseViewModel
     {
         #region Properties
-        private static HttpClient _client = new HttpClient();
+        
+        private RequestHandler _requestHandler;
         private string[] _fileNames;
+
+        private string logPath;
+        public string LogPath
+        {
+            get
+            {
+                return logPath;
+            }
+            set
+            {
+                logPath = value;
+                OnPropertyChanged();
+            }
+        }
 
         private string confirmString;
         public string ConfirmString
@@ -77,8 +96,8 @@ namespace URNNBNSolver.ViewModels
                 OnPropertyChanged();
             }
         }
-        public List<string> Servs { get; set; }
         public int SelectedIndex { get; set; }
+        public List<string> Servs { get; set; }
 
         string selectedServ = null;
         public string SelectedServ
@@ -86,18 +105,20 @@ namespace URNNBNSolver.ViewModels
             get { return this.selectedServ; }
             set
             {
-                if (value.StartsWith("Test"))
+                if (_requestHandler != null)
                 {
-                    _serverURL = "https://resolver-test.nkp.cz/api/v4";
-                    _sigla = "ex001";
+                    if (value.StartsWith("Test"))
+                    {
+                        _requestHandler.ServerURL = "https://resolver-test.nkp.cz/api/v4";
+                        _requestHandler.Sigla = "ex001";
+                    }
+                    else
+                    {
+                        _requestHandler.ServerURL = "testChangeServer";
+                        _requestHandler.Sigla = "ex001";
+                    }
                 }
-                else
-                {
-                    _serverURL = "testChangeServer";
-                    _sigla = "ex001";
-                }
-
-
+                
                 this.selectedServ = value;
                 
                 OnPropertyChanged(); 
@@ -105,24 +126,24 @@ namespace URNNBNSolver.ViewModels
         }
 
 
-        private string _serverURL = "https://resolver-test.nkp.cz/api/v4";
-        private string _sigla = "ex001";
-        private string _login = "exon";
-        private string _psw = "tpL9zsk9";
+       
         #endregion
 
         public RelayCommand SelectMetsCommand { get; set; }
         public RelayCommand GenerateCommand { get; set; }
-
+        public RelayCommand SetLogCommand { get; set; }
         public MainViewModel()
         {
             Servs = new List<string> { "Produkční server", "Test server"};
             SelectedIndex = 1;
 
+            _requestHandler = new RequestHandler();
 
             SelectMetsCommand = new RelayCommand(param => this.OnSelectMets(), param => true);
             GenerateCommand = new RelayCommand(param => this.OnGenerateURNNBN(), param => true);
+            SetLogCommand = new RelayCommand(param => this.OnSetLog(), param => true);
         }
+
         private Dictionary<string, string> GetMeta(XDocument _xMets)
         {
             Dictionary<string, string> metas = new Dictionary<string, string>();
@@ -141,17 +162,28 @@ namespace URNNBNSolver.ViewModels
             metas.Add("otherOriginatorName", GetFullName(_xMets.Descendants(mNS + "name").Where(x => x.Attribute("type").Value == "personal" && x.Attribute("usage") != null && x.Attribute("usage").Value == "primary").FirstOrDefault())); //ověřit
             metas.Add("publisher", _xMets.Descendants(mNS + "publisher").FirstOrDefault()?.Value);
             metas.Add("place", _xMets.Descendants(mNS + "placeTerm").Where(x => x.Attribute("type").Value == "text").FirstOrDefault()?.Value);
-            metas.Add("year", _xMets.Descendants(mNS + "dateIssued").FirstOrDefault()?.Value);
-            metas.Add("uuid", _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "uuid").FirstOrDefault()?.Value);
+            metas.Add("year", _xMets.Descendants(mNS + "dateIssued").FirstOrDefault()?.Value);            
             metas.Add("urnnbn", _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "urnnbn").FirstOrDefault()?.Value);
             metas.Add("financed", _xMets.Descendants(mNS + "financed").FirstOrDefault()?.Value); //ověřit
             metas.Add("contractNumber", _xMets.Descendants(mNS + "contractNumber").FirstOrDefault()?.Value); //ověřit
+
+            if(metas["projectType"].ToLower().Equals("periodical"))
+            {
+                var issueMods = _xMets.Descendants(mNS +"mods").Where(x => x.Attribute("ID").Value.Contains("_ISSUE_")).FirstOrDefault();
+                metas.Add("uuid", issueMods.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "uuid").FirstOrDefault()?.Value);
+            }
+            else
+            {
+                var volumeMods = _xMets.Descendants(mNS + "mods").Where(x => x.Attribute("ID").Value.Contains("_VOLUME_")).FirstOrDefault();
+                metas.Add("uuid", volumeMods.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "uuid").FirstOrDefault()?.Value);
+            }
+            
 
             return metas;
         }
         private void OnSelectMets()
         {
-            OpenFileDialog dlg = new OpenFileDialog();
+            Microsoft.Win32.OpenFileDialog dlg = new Microsoft.Win32.OpenFileDialog();
             dlg.Multiselect = true;
             dlg.FileName = "Mets";
             dlg.DefaultExt = ".xml";
@@ -162,255 +194,65 @@ namespace URNNBNSolver.ViewModels
             if (result == true)
             {
                 _fileNames = dlg.FileNames;
-                ConfirmString = "Vybráno " + _fileNames.Length + " souborů.";
-
-                
+                ConfirmString = "Vybráno " + _fileNames.Length + " souborů.";               
             }
         }
         private async void OnGenerateURNNBN()
         {
             if (_fileNames == null)
             {
-                MessageBox.Show("Nejsou vybraná žádná mets!");
+                System.Windows.MessageBox.Show("Nejsou vybraná žádná mets!");
                 return;
             }
+
+            InitProtocol();
             
-            XNamespace mNS = XNamespace.Get("http://www.loc.gov/mods/v3");
-            XNamespace dNS = XNamespace.Get("http://purl.org/dc/elements/1.1/");
-
-            ProtocolCollection = new ObservableCollection<string>();
-
-            AddToProtocol("Zpracováni probíha na " + _serverURL);
+            AddToProtocol("Zpracováni probíha na " + _requestHandler.ServerURL );
+            AddToProtocol("");
 
             for (int i = 0; i < _fileNames.Length; i++)
             {
+                AddToProtocol("*****************START*****************");
+
+                AddToProtocol("[" + DateTime.Now.ToLongTimeString() + "]");
+                AddToProtocol("soubor : " + Path.GetFileNameWithoutExtension(_fileNames[i]));
 
                 XDocument _xMets = XDocument.Load(_fileNames[i]);
 
                 Dictionary<string,string> _metaDict = GetMeta(_xMets);
 
-                XDocument _xReq = await CreateRequest(_metaDict);
-
-                var urnnbn = await Send4RegisterURNNBN(_xReq);
-
-                var urnNodesMods =_xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "urnnbn");
-                if (urnnbn != null)
+                if (_metaDict["urnnbn"] == null)
                 {
-                    foreach (var node in urnNodesMods)
-                    {
-                        node.Value = urnnbn;
-                    }
-
-                    var urnNodesDC = _xMets.Descendants(dNS + "identifier").Where(x => x.Value.StartsWith("urn:nbn"));
-                    foreach (var node in urnNodesDC)
-                    {
-                        node.Value = urnnbn;
-                    }
-
-                    if (KeepOriginalMets)
-                    {                        
-                        string dir = Path.GetDirectoryName(_fileNames[i]);
-                        string original = dir + "/" + Path.GetFileNameWithoutExtension(_fileNames[i]) + "_original.xml";
-
-                        if (File.Exists(original))
-                        {
-                            File.Delete(original);
-                        }
-
-                        File.Move(_fileNames[i], original);
-
-                        _xMets.Save(_fileNames[i]);
-                        AddToProtocol("Původní soubor byl zachován.");
-                    }
-                    else
-                    {
-                        _xMets.Save(_fileNames[i]);
-                        AddToProtocol("Původní soubor METS přepsán.");
-                    }
+                    AddToProtocol("Soubor neobsahuje urnnbn.");
+                    return;
                 }
-                else
-                    AddToProtocol("Nepodařilo se vygenerovat nové URNNBN.");
-                
+
+                XDocument _xReq = await _requestHandler.CreateRequest(_metaDict,WithPredecessor);
+               
+                //var urnnbn = await _requestHandler.Send4RegisterURNNBN(_xReq);
+
+                //WriteXML(urnnbn,_xMets, _fileNames[i]);
+
+                AddToProtocol("URNNBN : " + "create deactivated"/*urnnbn*/);
+
+                AddToProtocol("******************END******************");
+
             }
         }
-
-        #region Requests
-        private async Task<XDocument> CreateRequest(Dictionary<string, string> metaDict)
+        private void OnSetLog()
         {
-            XNamespace mNS = XNamespace.Get("http://resolver.nkp.cz/v4/");
-            XDocument request = new XDocument();
 
-            string mainEle = "";
-            string title = "";
-            string subtitle = "";
-
-            if (metaDict["projectType"].ToLower() == "periodical")
+            using (var fbd = new FolderBrowserDialog())
             {
-                mainEle = "periodicalIssue";
-                title = "periodicalTitle";
-                subtitle = "issueTitle";
-            }
-            else
-            {
-                mainEle = "monographVolume";
-                title = "monographTitle";
-                subtitle = "volumeTitle";
-            }
+                DialogResult result = fbd.ShowDialog();
 
-            XElement root =
-                new XElement(mNS + "import",
-                    new XElement(mNS + mainEle,
-                        new XElement(mNS + "titleInfo",
-                            new XElement(mNS + title, metaDict["title"]))),
-                    new XElement(mNS + "digitalDocument"));
-
-            XElement main = root.Element(mNS + mainEle);
-
-            if (metaDict["subTitle"] != null)
-                root.Descendants(mNS + title).First().AddAfterSelf(new XElement(mNS + subtitle, metaDict["subTitle"]));
-            else
-                root.Descendants(mNS + title).First().AddAfterSelf(new XElement(mNS + subtitle, "default"));
-
-            if (metaDict["ccnb"] != null)
-                main.Add(new XElement(mNS + "ccnb", metaDict["ccnb"]));
-            if (metaDict["isnb"] != null)
-                main.Add(new XElement(mNS + "isnb", metaDict["isnb"]));
-            if (metaDict["documentType"] != null)
-                main.Add(new XElement(mNS + "documentType", metaDict["documentType"]));
-            if (metaDict["digitalBorn"] != null)
-                main.Add(new XElement(mNS + "digitalBorn", metaDict["digitalBorn"]));
-            if (metaDict["primaryOriginatorName"] != null)
-                main.Add(new XElement(mNS + "primaryOriginator", metaDict["primaryOriginatorName"], new XAttribute("type", "AUTHOR")));
-
-            main.Add(new XElement(mNS + "publication"));
-            var publication = main.Element(mNS + "publication");
-
-            if (metaDict["publisher"] != null)
-                publication.Add(new XElement(mNS + "publisher", metaDict["publisher"]));
-            if (metaDict["place"] != null)
-                publication.Add(new XElement(mNS + "place", metaDict["place"]));
-            if (metaDict["year"] != null)
-                publication.Add(new XElement(mNS + "year", metaDict["year"]));
-
-            XElement digitalDocument = root.Element(mNS + "digitalDocument");
-
-            digitalDocument.Add(new XElement(mNS + "archiverId", "1"));
-
-            if (WithPredecessor)
-            {
-                await Send4DeleteIdentifiers(metaDict["urnnbn"]);
-
-                AddToProtocol("Registrování s následnickou vazbou.");
-
-                digitalDocument.Add(new XElement(mNS + "urnNbn"));
-                digitalDocument.Element(mNS + "urnNbn").Add(new XElement(mNS + "predecessor", new XAttribute("value", metaDict["urnnbn"]), new XAttribute("note", "test note")));
-            }
-            else
-            {
-                AddToProtocol("Registrování bez vazby.");
-
-                if (await Send4DeleteIdentifiers(metaDict["urnnbn"]))
-                    await Send4DeleteURNNBN(metaDict["urnnbn"]);
-            }
-
-            digitalDocument.Add(new XElement(mNS + "registrarScopeIdentifiers"));
-
-            digitalDocument.Element(mNS + "registrarScopeIdentifiers").Add(new XElement(mNS + "id", metaDict["uuid"], new XAttribute("type", "K4_pid")));
-
-            if (metaDict["financed"] != null)
-                digitalDocument.Add(new XElement(mNS + "financed", metaDict["financed"]));
-            if (metaDict["contractNumber"] != null)
-                digitalDocument.Add(new XElement(mNS + "contractNumber", metaDict["contractNumber"]));
-
-            request.Add(root);
-            return request;
-        }
-        private async Task<string> Send4RegisterURNNBN(XDocument request)
-        {
-            try
-            {
-                //https://resolver-test.nkp.cz/api/v4/registrars/ex001/digitalDocuments
-                string url = _serverURL + "/registrars/" + _sigla + "/digitalDocuments";
-
-                Authorize();
-
-                var stringContent = new StringContent(request.ToString(), Encoding.UTF8, "application/xml");
-                var response = await _client.PostAsync(url, stringContent);
-
-                string responseBody = await response.Content.ReadAsStringAsync();
-
-                XNamespace mNS = XNamespace.Get("http://resolver.nkp.cz/v4/");
-                responseBody = XDocument.Parse(responseBody).Descendants(mNS + "value").FirstOrDefault()?.Value.ToString();
-
-                if (responseBody == null)
+                if (result == DialogResult.OK && !string.IsNullOrWhiteSpace(fbd.SelectedPath))
                 {
-                    AddToProtocol("UUID již bylo registrováno u jiného dokumentu.");
+                    LogPath = fbd.SelectedPath;
                 }
-                else
-                    AddToProtocol("Nové URNNBN zaregistrováno.", responseBody, "This", "Webová služba nedokázala odpovědět, zkuste to prosím znovu.");
-
-                return responseBody;
-            }
-            catch
-            {
-                MessageBox.Show("Vyskytl se neočekávaný problém při registraci nového urnnbn!");
-                return null;
             }
         }
-        private async Task<bool> Send4DeleteURNNBN(string urnnbn)
-        {
-            try
-            {
-                //https://resolver-test.nkp.cz/api/v4/urnnbn/urn:nbn:cz:ex001-0000xy
 
-                Authorize();
-
-                string _urnnbn = urnnbn;
-
-                string addr = _serverURL + "/urnnbn/" + _urnnbn;
-
-                HttpResponseMessage response = await _client.DeleteAsync(addr);
-
-                string responseBody = await response.Content.ReadAsStringAsync();
-
-                AddToProtocol("Původní URNNBN bylo deaktivováno.", responseBody, "This", "Webová služba nedokázala odpovědět, zkuste to prosím znovu.");
-
-                return true;
-            }
-            catch
-            {
-                MessageBox.Show("Vyskytl se neočekávaný problém při deaktivaci starého urnnbn!");
-                return false;
-            }
-
-        }
-        private async Task<bool> Send4DeleteIdentifiers(string urnnbn)
-        {
-            try
-            {
-                //https://resolver-test.nkp.cz/api/v4/resolver/urn:nbn:cz:ex001-0000y3/registrarScopeIdentifiers
-
-                Authorize();
-
-                string _urnnbn = urnnbn;
-
-                string addr = _serverURL + "/resolver/" + _urnnbn + "/registrarScopeIdentifiers";
-
-                HttpResponseMessage response = await _client.DeleteAsync(addr);
-
-                string responseBody = await response.Content.ReadAsStringAsync();
-
-                AddToProtocol("Identifikátory na předchůdci byly deaktivovány.", responseBody, "This", "Webová služba nedokázala odpovědět, zkuste to prosím znovu.");
-
-                return true;
-            }
-            catch
-            {
-                MessageBox.Show("Vyskytl se neočekávaný problém při odtraňování identifikátorů!");
-                return false;
-            }
-        }
-        #endregion
         #region HelperFcs
         private string GetFullName(XElement _xEle)
         {
@@ -432,23 +274,74 @@ namespace URNNBNSolver.ViewModels
             }
             else return null;
         }
-        private void Authorize()
+        private void InitProtocol()
         {
-            var byteArray = Encoding.ASCII.GetBytes(_login + ":" + _psw);
-            _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
-
+            ProtocolCollection = new ObservableCollection<string>();
+            _requestHandler.ProtocolCollection = this.ProtocolCollection;
         }
-        private void AddToProtocol(string protocolText ,string responseText = null, string ifStartWith = null,string elseText = null )
+        private void AddToProtocol(string protocolText, string responseText = null, string ifStartWith = null, string elseText = null)
         {
+            string toAdd = "";
+
             if (ifStartWith == null)
-                ProtocolCollection.Add("->" + protocolText);
+                toAdd = protocolText;
             else
             {
                 if (responseText.StartsWith(ifStartWith))
-                    ProtocolCollection.Add("->" + elseText);
+                    toAdd = elseText;
                 else
-                    ProtocolCollection.Add("->" + protocolText);
+                    toAdd = protocolText;
             }
+
+            if (!toAdd.StartsWith("*") && !toAdd.StartsWith("Zpracováni") && !toAdd.StartsWith("[") && toAdd != "")
+            {
+                toAdd = "->" + toAdd;
+            }
+
+            ProtocolCollection.Add(toAdd);
+        }
+        private void WriteXML(string urnnbn,XDocument _xMets,string fileName)
+        {
+            if (urnnbn != null)
+            {
+                XNamespace mNS = XNamespace.Get("http://www.loc.gov/mods/v3");
+                XNamespace dNS = XNamespace.Get("http://purl.org/dc/elements/1.1/");
+
+                var urnNodesMods = _xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "urnnbn");
+                foreach (var node in urnNodesMods)
+                {
+                    node.Value = urnnbn;
+                }
+
+                var urnNodesDC = _xMets.Descendants(dNS + "identifier").Where(x => x.Value.StartsWith("urn:nbn"));
+                foreach (var node in urnNodesDC)
+                {
+                    node.Value = urnnbn;
+                }
+
+                if (KeepOriginalMets)
+                {
+                    string dir = Path.GetDirectoryName(fileName);
+                    string original = dir + "/" + Path.GetFileNameWithoutExtension(fileName) + "_original.xml";
+
+                    if (File.Exists(original))
+                    {
+                        File.Delete(original);
+                    }
+
+                    File.Move(fileName, original);
+
+                    _xMets.Save(fileName);
+                    AddToProtocol("Původní soubor byl zachován.");
+                }
+                else
+                {
+                    _xMets.Save(fileName);
+                    AddToProtocol("Původní soubor METS přepsán.");
+                }
+            }
+            else
+                AddToProtocol("Nepodařilo se vygenerovat nové URNNBN.");
         }
 
         #endregion

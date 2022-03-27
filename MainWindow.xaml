@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:URNNBNSolver"
         mc:Ignorable="d"
-        Title="MainWindow" Height="350" Width="550">
+        Title="MainWindow" Height="390" Width="550">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*"/>
@@ -18,9 +18,9 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <GroupBox Margin="10"
+        <GroupBox Margin="10,10,10,70"
                   Header="Settings"
-                  Grid.RowSpan="3">
+                  Grid.RowSpan="4">
             <StackPanel>
                 
                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
@@ -53,18 +53,28 @@
                       Margin="10,0,10,10"
                       IsChecked="{Binding Path=KeepOriginalMets, Mode=OneWayToSource}"></CheckBox>
                 </StackPanel>
+                
+                <Button Width="70"
+                        Height="25"
+                        HorizontalAlignment="Left"
+                        Content="Nastavit log"
+                        Margin="10,30,0,0"
+                        Command="{Binding SetLogCommand}"/>
+                <TextBlock Margin="10,10,0,0"
+                           Text="{Binding LogPath}"                                                    
+                           TextWrapping="Wrap"></TextBlock>
             </StackPanel>
         
         </GroupBox>
 
         <Button Grid.Row="3"
-                            Content="Generovat"
-                            Width="70"
-                            Height="25"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Bottom"
-                            Margin="0,0,15,20"
-                            Command="{Binding GenerateCommand}"></Button>
+                Content="Generovat"
+                Width="70"
+                Height="25"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,15,20"
+                Command="{Binding GenerateCommand}"></Button>
 
 
         <GroupBox Grid.Column="1" Header="Protocol"
