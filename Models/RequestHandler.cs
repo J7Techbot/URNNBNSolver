@@ -13,6 +13,7 @@ namespace URNNBNSolver.Models
     public class RequestHandler
     {
         private static HttpClient _client = new HttpClient();
+
         public ObservableCollection<string> ProtocolCollection { get; set; }
 
         public string ServerURL = "https://resolver-test.nkp.cz/api/v4";
@@ -203,15 +204,24 @@ namespace URNNBNSolver.Models
         }
         private void AddToProtocol(string protocolText, string responseText = null, string ifStartWith = null, string elseText = null)
         {
+            string toAdd = "";
+
             if (ifStartWith == null)
-                ProtocolCollection.Add("->" + protocolText);
+                toAdd = protocolText;
             else
             {
                 if (responseText.StartsWith(ifStartWith))
-                    ProtocolCollection.Add("->" + elseText);
+                    toAdd = elseText;
                 else
-                    ProtocolCollection.Add("->" + protocolText);
+                    toAdd = protocolText;
             }
+
+            if (!toAdd.StartsWith("*") && !toAdd.StartsWith("Zpracováni") && !toAdd.StartsWith("[") && toAdd != "")
+            {
+                toAdd = "->" + toAdd;
+            }
+
+            ProtocolCollection.Add(toAdd);
         }
     }
 }

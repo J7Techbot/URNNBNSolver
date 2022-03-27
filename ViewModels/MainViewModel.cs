@@ -25,6 +25,7 @@ namespace URNNBNSolver.ViewModels
         
         private RequestHandler _requestHandler;
         private string[] _fileNames;
+        private string _log;
 
         private string logPath;
         public string LogPath
@@ -114,7 +115,7 @@ namespace URNNBNSolver.ViewModels
                     }
                     else
                     {
-                        _requestHandler.ServerURL = "testChangeServer";
+                        _requestHandler.ServerURL = "https://resolver.nkp.cz/api/v4";
                         _requestHandler.Sigla = "ex001";
                     }
                 }
@@ -208,10 +209,11 @@ namespace URNNBNSolver.ViewModels
             InitProtocol();
             
             AddToProtocol("Zpracováni probíha na " + _requestHandler.ServerURL );
-            AddToProtocol("");
+            
 
             for (int i = 0; i < _fileNames.Length; i++)
             {
+                AddToProtocol("");
                 AddToProtocol("*****************START*****************");
 
                 AddToProtocol("[" + DateTime.Now.ToLongTimeString() + "]");
@@ -228,16 +230,19 @@ namespace URNNBNSolver.ViewModels
                 }
 
                 XDocument _xReq = await _requestHandler.CreateRequest(_metaDict,WithPredecessor);
-               
-                //var urnnbn = await _requestHandler.Send4RegisterURNNBN(_xReq);
 
-                //WriteXML(urnnbn,_xMets, _fileNames[i]);
+                var urnnbn = await _requestHandler.Send4RegisterURNNBN(_xReq);
 
-                AddToProtocol("URNNBN : " + "create deactivated"/*urnnbn*/);
+                WriteXML(urnnbn, _xMets, _fileNames[i]);
+
+                AddToProtocol("staré : " + _metaDict["urnnbn"]);
+                AddToProtocol("nové : " + urnnbn);
 
                 AddToProtocol("******************END******************");
 
             }
+
+            WriteLog();
         }
         private void OnSetLog()
         {
@@ -299,6 +304,25 @@ namespace URNNBNSolver.ViewModels
             }
 
             ProtocolCollection.Add(toAdd);
+            //_log = _log + toAdd + "\n";
+        }
+        private void WriteLog()
+        {
+            foreach (var item in ProtocolCollection)
+            {
+                _log = _log + item + "\n";
+            }
+            
+            try
+            {
+                System.IO.File.WriteAllText(logPath + "/urnnbn_log_"+ DateTime.Now.ToString("ddHHmmss") +".txt", _log);
+                AddToProtocol("");
+                AddToProtocol("Log zapsán do " + logPath + "/urnnbn_log_" + DateTime.Now.ToString("ddHHmmss") + ".txt");
+            }
+            catch (Exception err)
+            {
+                Console.WriteLine(err.Message);
+            }
         }
         private void WriteXML(string urnnbn,XDocument _xMets,string fileName)
         {
