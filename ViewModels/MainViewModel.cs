@@ -2,6 +2,7 @@
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -48,19 +49,61 @@ namespace URNNBNSolver.ViewModels
             }
         }
 
-        private bool newUuid;
-        public bool NewUuid
+        private bool keepOriginalMets;
+        public bool KeepOriginalMets
         {
             get
             {
-                return newUuid;
+                return keepOriginalMets;
             }
             set
             {
-                newUuid = value;
+                keepOriginalMets = value;
                 OnPropertyChanged();
             }
         }
+
+        private ObservableCollection<string> protocolCollection;
+
+        public ObservableCollection<string> ProtocolCollection
+        {
+            get
+            {
+                return protocolCollection;
+            }
+            set
+            {
+                protocolCollection = value;
+                OnPropertyChanged();
+            }
+        }
+        public List<string> Servs { get; set; }
+        public int SelectedIndex { get; set; }
+
+        string selectedServ = null;
+        public string SelectedServ
+        {
+            get { return this.selectedServ; }
+            set
+            {
+                if (value.StartsWith("Test"))
+                {
+                    _serverURL = "https://resolver-test.nkp.cz/api/v4";
+                    _sigla = "ex001";
+                }
+                else
+                {
+                    _serverURL = "testChangeServer";
+                    _sigla = "ex001";
+                }
+
+
+                this.selectedServ = value;
+                
+                OnPropertyChanged(); 
+            }
+        }
+
 
         private string _serverURL = "https://resolver-test.nkp.cz/api/v4";
         private string _sigla = "ex001";
@@ -73,6 +116,10 @@ namespace URNNBNSolver.ViewModels
 
         public MainViewModel()
         {
+            Servs = new List<string> { "Produkční server", "Test server"};
+            SelectedIndex = 1;
+
+
             SelectMetsCommand = new RelayCommand(param => this.OnSelectMets(), param => true);
             GenerateCommand = new RelayCommand(param => this.OnGenerateURNNBN(), param => true);
         }
@@ -116,6 +163,8 @@ namespace URNNBNSolver.ViewModels
             {
                 _fileNames = dlg.FileNames;
                 ConfirmString = "Vybráno " + _fileNames.Length + " souborů.";
+
+                
             }
         }
         private async void OnGenerateURNNBN()
@@ -125,9 +174,13 @@ namespace URNNBNSolver.ViewModels
                 MessageBox.Show("Nejsou vybraná žádná mets!");
                 return;
             }
-
+            
             XNamespace mNS = XNamespace.Get("http://www.loc.gov/mods/v3");
             XNamespace dNS = XNamespace.Get("http://purl.org/dc/elements/1.1/");
+
+            ProtocolCollection = new ObservableCollection<string>();
+
+            AddToProtocol("Zpracováni probíha na " + _serverURL);
 
             for (int i = 0; i < _fileNames.Length; i++)
             {
@@ -141,18 +194,43 @@ namespace URNNBNSolver.ViewModels
                 var urnnbn = await Send4RegisterURNNBN(_xReq);
 
                 var urnNodesMods =_xMets.Descendants(mNS + "identifier").Where(x => x.Attribute("type").Value == "urnnbn");
-                foreach (var node in urnNodesMods)
+                if (urnnbn != null)
                 {
-                    node.Value = urnnbn;
-                }
+                    foreach (var node in urnNodesMods)
+                    {
+                        node.Value = urnnbn;
+                    }
 
-                var urnNodesDC = _xMets.Descendants(dNS + "identifier").Where(x => x.Value.StartsWith("urn:nbn"));
-                foreach (var node in urnNodesDC)
-                {
-                    node.Value = urnnbn;
-                }
+                    var urnNodesDC = _xMets.Descendants(dNS + "identifier").Where(x => x.Value.StartsWith("urn:nbn"));
+                    foreach (var node in urnNodesDC)
+                    {
+                        node.Value = urnnbn;
+                    }
 
-                _xMets.Save(_fileNames[i]);
+                    if (KeepOriginalMets)
+                    {                        
+                        string dir = Path.GetDirectoryName(_fileNames[i]);
+                        string original = dir + "/" + Path.GetFileNameWithoutExtension(_fileNames[i]) + "_original.xml";
+
+                        if (File.Exists(original))
+                        {
+                            File.Delete(original);
+                        }
+
+                        File.Move(_fileNames[i], original);
+
+                        _xMets.Save(_fileNames[i]);
+                        AddToProtocol("Původní soubor byl zachován.");
+                    }
+                    else
+                    {
+                        _xMets.Save(_fileNames[i]);
+                        AddToProtocol("Původní soubor METS přepsán.");
+                    }
+                }
+                else
+                    AddToProtocol("Nepodařilo se vygenerovat nové URNNBN.");
+                
             }
         }
 
@@ -222,11 +300,15 @@ namespace URNNBNSolver.ViewModels
             {
                 await Send4DeleteIdentifiers(metaDict["urnnbn"]);
 
+                AddToProtocol("Registrování s následnickou vazbou.");
+
                 digitalDocument.Add(new XElement(mNS + "urnNbn"));
                 digitalDocument.Element(mNS + "urnNbn").Add(new XElement(mNS + "predecessor", new XAttribute("value", metaDict["urnnbn"]), new XAttribute("note", "test note")));
             }
             else
             {
+                AddToProtocol("Registrování bez vazby.");
+
                 if (await Send4DeleteIdentifiers(metaDict["urnnbn"]))
                     await Send4DeleteURNNBN(metaDict["urnnbn"]);
             }
@@ -260,6 +342,13 @@ namespace URNNBNSolver.ViewModels
                 XNamespace mNS = XNamespace.Get("http://resolver.nkp.cz/v4/");
                 responseBody = XDocument.Parse(responseBody).Descendants(mNS + "value").FirstOrDefault()?.Value.ToString();
 
+                if (responseBody == null)
+                {
+                    AddToProtocol("UUID již bylo registrováno u jiného dokumentu.");
+                }
+                else
+                    AddToProtocol("Nové URNNBN zaregistrováno.", responseBody, "This", "Webová služba nedokázala odpovědět, zkuste to prosím znovu.");
+
                 return responseBody;
             }
             catch
@@ -283,6 +372,8 @@ namespace URNNBNSolver.ViewModels
                 HttpResponseMessage response = await _client.DeleteAsync(addr);
 
                 string responseBody = await response.Content.ReadAsStringAsync();
+
+                AddToProtocol("Původní URNNBN bylo deaktivováno.", responseBody, "This", "Webová služba nedokázala odpovědět, zkuste to prosím znovu.");
 
                 return true;
             }
@@ -308,7 +399,9 @@ namespace URNNBNSolver.ViewModels
                 HttpResponseMessage response = await _client.DeleteAsync(addr);
 
                 string responseBody = await response.Content.ReadAsStringAsync();
-                   
+
+                AddToProtocol("Identifikátory na předchůdci byly deaktivovány.", responseBody, "This", "Webová služba nedokázala odpovědět, zkuste to prosím znovu.");
+
                 return true;
             }
             catch
@@ -345,6 +438,19 @@ namespace URNNBNSolver.ViewModels
             _client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
 
         }
+        private void AddToProtocol(string protocolText ,string responseText = null, string ifStartWith = null,string elseText = null )
+        {
+            if (ifStartWith == null)
+                ProtocolCollection.Add("->" + protocolText);
+            else
+            {
+                if (responseText.StartsWith(ifStartWith))
+                    ProtocolCollection.Add("->" + elseText);
+                else
+                    ProtocolCollection.Add("->" + protocolText);
+            }
+        }
+
         #endregion
     }
 }

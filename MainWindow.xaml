@@ -5,40 +5,90 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:URNNBNSolver"
         mc:Ignorable="d"
-        Title="MainWindow" Height="250" Width="250">
+        Title="MainWindow" Height="350" Width="550">
     <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <TextBlock Text="{Binding ConfirmString}"
-                   Width="125"
-                   Height="25"
-                   HorizontalAlignment="Right"
-                   Margin="80,0,10,0"
-                   TextWrapping="Wrap"></TextBlock>
-        <Button Content="Vyber mets"
-                Width="70"
-                Height="25"
-                HorizontalAlignment="Left"
-                Margin="10,0,10,0"
-                Command="{Binding SelectMetsCommand}"></Button>
-        <StackPanel Grid.Row="1">
-            <CheckBox Content="Registrace s následníkem"
+
+        <GroupBox Margin="10"
+                  Header="Settings"
+                  Grid.RowSpan="3">
+            <StackPanel>
+                
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                    <Button Content="Vyber mets"
+                             Width="70"
+                             Height="25"
+                             HorizontalAlignment="Left"
+                             Margin="10,0,0,0"
+                             Command="{Binding SelectMetsCommand}"></Button>
+                    <TextBlock Text="{Binding ConfirmString}"
+                               Width="115"
+                               Height="25"
+                               HorizontalAlignment="Left"
+                               VerticalAlignment="Top"
+                               Margin="25,0,0,0"
+                               TextWrapping="Wrap"></TextBlock>     
+                </StackPanel>
+                <ComboBox Margin="10,20,0,0"
+                          Width="150"
+                          HorizontalAlignment="Left"
+                          ItemsSource="{Binding Servs}"
+                          SelectedItem="{Binding SelectedServ}"
+                          IsSynchronizedWithCurrentItem="True"
+                          SelectedIndex="{Binding SelectedIndex, Mode=TwoWay}"/>
+                <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Margin="0,20,0,0">
+                    <CheckBox Content="Registrace s následníkem"
                       Margin="10,0,10,10"
                       IsChecked="{Binding Path=WithPredecessor, Mode=OneWayToSource}"></CheckBox>
-            <CheckBox Content="Generovat nové uuid"
+                    <CheckBox Content="Zachovat původní soubor"
                       Margin="10,0,10,10"
-                      IsChecked="{Binding Path=NewUuid, Mode=OneWayToSource}"></CheckBox>
-        </StackPanel>
+                      IsChecked="{Binding Path=KeepOriginalMets, Mode=OneWayToSource}"></CheckBox>
+                </StackPanel>
+            </StackPanel>
+        
+        </GroupBox>
+
         <Button Grid.Row="3"
-                Content="Generovat"
-                Width="70"
-                Height="25"
-                HorizontalAlignment="Right"
-                Margin="10,0,10,0"
-                Command="{Binding GenerateCommand}"></Button>
+                            Content="Generovat"
+                            Width="70"
+                            Height="25"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Bottom"
+                            Margin="0,0,15,20"
+                            Command="{Binding GenerateCommand}"></Button>
+
+
+        <GroupBox Grid.Column="1" Header="Protocol"
+                  Grid.RowSpan="4"
+                  Margin="10"
+                  >
+            <ListBox ItemsSource="{Binding ProtocolCollection}"
+                     BorderThickness="0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid>
+                            <TextBlock
+                                Text="{Binding}"
+                                TextWrapping="Wrap"
+                                />
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+
+        </GroupBox>
+
+
     </Grid>
 </Window>
