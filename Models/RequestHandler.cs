@@ -12,6 +12,7 @@ namespace URNNBNSolver.Models
 {
     public class RequestHandler
     {
+
         private static HttpClient _client = new HttpClient();
 
         public ObservableCollection<string> ProtocolCollection { get; set; }
